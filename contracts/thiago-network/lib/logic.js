@@ -1,43 +1,71 @@
-/*
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-'use strict';
 /**
- * Write your transction processor functions here
- */
-
-/**
- * Sample transaction
- * @param {org.tresende.SampleTransaction} sampleTransaction
+ * @param {org.acme.model.Create} _create
  * @transaction
  */
-async function sampleTransaction(tx) {
-    // Save the old value of the asset.
-    const oldValue = tx.asset.value;
 
-    // Update the asset with the new value.
-    tx.asset.value = tx.newValue;
+function create(create) {
+    let to = create.to;
 
-    // Get the asset registry for the asset.
-    const assetRegistry = await getAssetRegistry('org.tresende.SampleAsset');
-    // Update the asset in the asset registry.
-    await assetRegistry.update(tx.asset);
+    return getAssetRegistry('org.acme.model.Coin')
+        .then(function (assetRegistry) {
+            var factory = getFactory();
 
-    // Emit an event for the modified asset.
-    let event = getFactory().newEvent('org.tresende', 'SampleEvent');
-    event.asset = tx.asset;
-    event.oldValue = oldValue;
-    event.newValue = tx.newValue;
-    emit(event);
+            var coins = [];
+            for (let index = 0; index < create.value; index++) {
+                var coin = factory.newResource('org.acme.model', 'Coin', Date.now() + '' + index);
+                coin.owner = to;
+                coin.ownerId = to.memberId
+                coins.push(coin);
+                assetRegistry.add(coin);
+            }
+
+            return getParticipantRegistry('org.acme.model.Member')
+                .then((toRegistry) => {
+                    to.balance += create.value;
+                    return toRegistry.update(to);
+                });
+        })
+}
+
+/**
+ * @param {org.acme.model.Transfer} _transfer
+ * @transaction
+ */
+
+function transfer(transfer) {
+
+    let coinRegistry = {};
+    let from = transfer.from;
+    let to = transfer.to;
+
+    if (from.balance < transfer.value) {
+        throw new Error('Insufficient Funds');
+    }
+
+    return getAssetRegistry('org.acme.model.Coin').then((assetRegistry) => {
+        coinRegistry = assetRegistry;
+        return assetRegistry.getAll();
+    }).then((coins) => {
+
+        coins = coins.filter((item) => {
+            return item.ownerId == from.memberId;
+        }).slice(0, transfer.value);
+
+        coins = coins.map((coin) => {
+            coin.owner = to;
+            coin.ownerId = to.memberId;;
+            coinRegistry.update(coin);
+        });
+
+        return getParticipantRegistry('org.acme.model.Member')
+            .then((fromRegistry) => {
+                from.balance -= transfer.value;
+                fromRegistry.update(from);
+                return getParticipantRegistry('org.acme.model.Member')
+                    .then((toRegistry) => {
+                        to.balance += transfer.value;
+                        return toRegistry.update(to);
+                    });
+            });
+    })
 }
